@@ -117,7 +117,6 @@
   (if evil-local-mode
       (progn
         (cl-pushnew 'evil-mode-map-alist emulation-mode-map-alists)
-        (evil-initialize-local-keymaps)
         (when (minibufferp)
           (setq-local evil-default-state 'insert)
           (setq-local evil-echo-state nil))
@@ -641,19 +640,25 @@ these states are recursively processed and added to the list.
 \(The EXCLUDED argument is an internal safeguard against
 infinite recursion, keeping track of processed states.)"
   (let* ((state (or state evil-state))
-         (enable (evil-state-property state :enable))
-         (map (cons
-               (evil-state-property state :mode)
-               (evil-state-property state :keymap t)))
-         (local-map (cons
-                     (evil-state-property state :local)
-                     (evil-state-property state :local-keymap t)))
+         (plist (cdr (assq state evil-state-properties)))
+         (enable (plist-get plist :enable))
+         (map-var (plist-get plist :keymap))
+         (local-map-var (plist-get plist :local-keymap))
+         (map (cons (plist-get plist :mode)
+                    (if (and (symbolp map-var) (boundp map-var))
+                        (symbol-value map-var)
+                      map-var)))
+         (local-map (cons (plist-get plist :local)
+                          (if (and (symbolp local-map-var)
+                                   (boundp local-map-var))
+                              (symbol-value local-map-var)
+                            local-map-var)))
          (minor-mode-maps (evil-state-minor-mode-keymaps state))
-         (aux-maps (evil-state-auxiliary-keymaps state))
-         (overriding-maps
-          (evil-state-overriding-keymaps state))
-         (intercept-maps
-          (evil-state-intercept-keymaps state))
+         (active-maps (current-active-maps))
+         (scanned-maps (evil--state-keymap-scans state active-maps))
+         (aux-maps (nth 2 scanned-maps))
+         (overriding-maps (nth 1 scanned-maps))
+         (intercept-maps (nth 0 scanned-maps))
          (result `(,intercept-maps))
          (remove-duplicates (null excluded)))
     (unless (memq state enable)
@@ -766,17 +771,41 @@ Return the keymap variable if VARIABLE is non-nil.
 See also `evil-mode-for-keymap'."
   (let* ((var (or (cdr (assq mode evil-global-keymaps-alist))
                   (cdr (assq mode evil-local-keymaps-alist))))
-         (map (or (symbol-value var)
-                  (cdr (assq mode minor-mode-map-alist)))))
-    (if variable var map)))
+          (map (or (symbol-value var)
+                   (cdr (assq mode minor-mode-map-alist)))))
+     (if variable var map)))
+
+(defun evil--state-keymap-scans (state active-maps)
+  "Scan ACTIVE-MAPS once for STATE-specific Evil keymaps.
+Return a list of the form (INTERCEPT OVERRIDING AUXILIARY)."
+  (let (intercept overriding auxiliary)
+    (dolist (map active-maps)
+      (let* ((aux-map (evil-get-auxiliary-keymap map state))
+             (mode nil)
+             intercept-map overriding-map)
+        (when aux-map
+          (push (cons (or mode (setq mode (evil-mode-for-keymap map t)))
+                      aux-map)
+                auxiliary))
+        (when (setq overriding-map (evil-overriding-keymap-p map state))
+          (push (cons (evil-mode-for-keymap overriding-map t)
+                      overriding-map)
+                overriding))
+        (when (setq intercept-map
+                    (or (evil-intercept-keymap-p map state)
+                        (and aux-map
+                             (evil-intercept-keymap-p aux-map state))))
+          (push (cons (evil-mode-for-keymap intercept-map t)
+                      intercept-map)
+                intercept))))
+    (list (nreverse intercept)
+          (nreverse overriding)
+          (nreverse auxiliary))))
 
 (defun evil-state-auxiliary-keymaps (state)
   "Return a keymap alist of auxiliary keymaps for STATE."
-  (let ((state (or state evil-state))
-        aux result)
-    (dolist (map (current-active-maps) (nreverse result))
-      (when (setq aux (evil-get-auxiliary-keymap map state))
-        (push (cons (evil-mode-for-keymap map t) aux) result)))))
+  (nth 2 (evil--state-keymap-scans (or state evil-state)
+                                   (current-active-maps))))
 
 (defun evil-state-minor-mode-keymaps (state)
   "Return a keymap alist of minor-mode keymaps for STATE."
@@ -784,24 +813,13 @@ See also `evil-mode-for-keymap'."
 
 (defun evil-state-overriding-keymaps (&optional state)
   "Return a keymap alist of overriding keymaps for STATE."
-  (let* ((state (or state evil-state))
-         result)
-    (dolist (map (current-active-maps))
-      (when (setq map (evil-overriding-keymap-p map state))
-        (push (cons (evil-mode-for-keymap map t) map) result)))
-    (nreverse result)))
+  (nth 1 (evil--state-keymap-scans (or state evil-state)
+                                   (current-active-maps))))
 
 (defun evil-state-intercept-keymaps (&optional state)
   "Return a keymap alist of intercept keymaps for STATE."
-  (let* ((state (or state evil-state))
-         result)
-    (dolist (map (current-active-maps))
-      (when (setq map (or (evil-intercept-keymap-p map state)
-                          (evil-intercept-keymap-p
-                           (evil-get-auxiliary-keymap map state) state)))
-        (push (cons (evil-mode-for-keymap map t) map) result)))
-    (setq result (nreverse result))
-    result))
+  (nth 0 (evil--state-keymap-scans (or state evil-state)
+                                   (current-active-maps))))
 
 (defun evil-set-auxiliary-keymap (map state &optional aux)
   "Set the auxiliary keymap for MAP in STATE to AUX.

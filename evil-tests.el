@@ -75,6 +75,21 @@
 (require 'evil-test-helpers)
 (require 'ispell)
 
+(declare-function evil-bench-profile-state-transitions
+                  "scripts/evil-benchmark-runtime")
+(declare-function evil-bench-profile-large-file-cursor-motion
+                  "scripts/evil-benchmark-runtime")
+(declare-function evil-bench-profile-startup-local-enable
+                  "scripts/evil-benchmark-runtime")
+(declare-function evil-bench-state-transitions
+                  "scripts/evil-benchmark-runtime")
+(declare-function evil-bench-large-file-cursor-motion
+                  "scripts/evil-benchmark-runtime")
+(declare-function evil-bench-motion-with-state-changes
+                  "scripts/evil-benchmark-runtime")
+(declare-function evil-bench-startup-local-enable
+                  "scripts/evil-benchmark-runtime")
+
 ;;; Code:
 
 (defvar evil-tests-run nil
@@ -365,6 +380,102 @@
       ("\C-o~de\C-o.")
       "abCdeF[]g")))
 
+(defvar evil-bench-run-on-load)
+(defvar evil-test-state-scan-mode nil)
+(defconst evil-test--root-directory
+  (file-name-directory (or load-file-name buffer-file-name default-directory)))
+
+(ert-deftest evil-test-runtime-benchmark-script-loads ()
+  "The runtime benchmark harness loads without macro-expansion errors."
+  :tags '(evil)
+  (let ((evil-bench-run-on-load nil))
+    (should
+     (load (expand-file-name "scripts/evil-benchmark-runtime"
+                             evil-test--root-directory)
+           nil t)))
+  (should (fboundp 'evil-bench-run))
+  (should (fboundp 'evil-bench-state-transitions)))
+
+(ert-deftest evil-test-runtime-benchmark-state-transitions-runs ()
+  "The runtime benchmark state transition workload runs in batch mode."
+  :tags '(evil)
+  (let ((evil-bench-run-on-load nil))
+    (load (expand-file-name "scripts/evil-benchmark-runtime"
+                            evil-test--root-directory)
+          nil t)
+    (should-not (null (evil-bench-state-transitions 1)))))
+
+(ert-deftest evil-test-runtime-benchmark-profile-runs ()
+  "The runtime benchmark profile path runs without ELP setup errors."
+  :tags '(evil)
+  (let ((evil-bench-run-on-load nil))
+    (load (expand-file-name "scripts/evil-benchmark-runtime"
+                            evil-test--root-directory)
+          nil t)
+    (should-not (null (evil-bench-profile-state-transitions)))))
+
+(ert-deftest evil-test-runtime-benchmark-large-file-cursor-motion-runs ()
+  "The large-file cursor motion workload runs in batch mode."
+  :tags '(evil)
+  (let ((evil-bench-run-on-load nil))
+    (load (expand-file-name "scripts/evil-benchmark-runtime"
+                            evil-test--root-directory)
+          nil t)
+    (should-not (null (evil-bench-large-file-cursor-motion 1)))))
+
+(ert-deftest evil-test-runtime-benchmark-motion-with-state-changes-runs ()
+  "The motion/state-change workload runs in batch mode."
+  :tags '(evil)
+  (let ((evil-bench-run-on-load nil))
+    (load (expand-file-name "scripts/evil-benchmark-runtime"
+                            evil-test--root-directory)
+          nil t)
+    (should-not (null (evil-bench-motion-with-state-changes 1)))))
+
+(ert-deftest evil-test-runtime-benchmark-large-file-cursor-motion-profile-runs ()
+  "The large-file motion profile path runs without ELP setup errors."
+  :tags '(evil)
+  (let ((evil-bench-run-on-load nil))
+    (load (expand-file-name "scripts/evil-benchmark-runtime"
+                            evil-test--root-directory)
+          nil t)
+    (should-not (null (evil-bench-profile-large-file-cursor-motion)))))
+
+(ert-deftest evil-test-runtime-benchmark-startup-local-enable-runs ()
+  "The local-enable startup workload runs in batch mode."
+  :tags '(evil)
+  (let ((evil-bench-run-on-load nil))
+    (load (expand-file-name "scripts/evil-benchmark-runtime"
+                            evil-test--root-directory)
+          nil t)
+    (should-not (null (evil-bench-startup-local-enable 1)))))
+
+(ert-deftest evil-test-runtime-benchmark-startup-local-enable-profile-runs ()
+  "The local-enable startup profile path runs without ELP setup errors."
+  :tags '(evil)
+  (let ((evil-bench-run-on-load nil))
+    (load (expand-file-name "scripts/evil-benchmark-runtime"
+                            evil-test--root-directory)
+          nil t)
+    (should-not (null (evil-bench-profile-startup-local-enable)))))
+
+(ert-deftest evil-test-local-mode-initializes-local-keymaps-once ()
+  "Enabling `evil-local-mode' should only initialize local keymaps once."
+  :tags '(evil)
+  (let ((call-count 0)
+        (orig-fn (symbol-function 'evil-initialize-local-keymaps)))
+    (cl-letf (((symbol-function 'evil-initialize-local-keymaps)
+               (lambda ()
+                 (setq call-count (1+ call-count))
+                 (funcall orig-fn))))
+      (with-current-buffer (generate-new-buffer " *evil-startup-test*")
+        (unwind-protect
+            (progn
+              (fundamental-mode)
+              (evil-local-mode 1)
+              (should (= call-count 1)))
+          (kill-buffer (current-buffer)))))))
+
 (defun evil-test-suppress-keymap (state)
   "Verify that `self-insert-command' is suppressed in STATE"
   (evil-test-buffer
@@ -457,6 +568,34 @@ when exiting Operator-Pending state")
       (evil-define-key 'normal evil--map "b" 'bar)
       (should (eq (lookup-key aux "f") 'foo))
       (should (eq (lookup-key aux "b") 'bar)))))
+
+(ert-deftest evil-test-intercept-keymaps-keep-aux-map-mode-association ()
+  "Auxiliary intercept keymaps keep the original mode lookup semantics."
+  :tags '(evil state)
+  (let* ((map (make-sparse-keymap))
+         (minor-mode-map-alist (cons (cons 'evil-test-state-scan-mode map)
+                                     minor-mode-map-alist))
+         (evil-test-state-scan-mode t)
+         entry aux)
+    (evil-make-intercept-map map 'normal t)
+    (setq aux (evil-get-auxiliary-keymap map 'normal))
+    (setq entry (rassq aux (evil-state-intercept-keymaps 'normal)))
+    (should entry)
+    (should (eq (car entry) t))))
+
+(ert-deftest evil-test-overriding-keymaps-keep-nested-map-mode-association ()
+  "Nested overriding keymaps keep the original mode lookup semantics."
+  :tags '(evil state)
+  (let* ((map (make-sparse-keymap))
+         (minor-mode-map-alist (cons (cons 'evil-test-state-scan-mode map)
+                                     minor-mode-map-alist))
+         (evil-test-state-scan-mode t)
+         entry override)
+    (evil-make-overriding-map map 'normal t)
+    (setq override (lookup-key map [override-state]))
+    (setq entry (rassq override (evil-state-overriding-keymaps 'normal)))
+    (should entry)
+    (should (eq (car entry) t))))
 
 (ert-deftest evil-test-global-local-map-binding ()
   "Test use of `evil-define-key' for binding in global maps."
@@ -884,6 +1023,71 @@ If nil, KEYS is used."
       (evil-test-repeat-info "r5"))
     (ert-info ("Call command with character argument with count 12")
       (evil-test-repeat-info "12rX"))))
+
+(ert-deftest evil-test-normal-motion-repeat-skips-repeat-recording ()
+  "Normal-state motions with `:repeat motion' do not start repeat recording."
+  :tags '(evil repeat)
+  (let ((start-count 0)
+        (stop-count 0)
+        (orig-start (symbol-function 'evil-repeat-start))
+        (orig-stop (symbol-function 'evil-repeat-stop)))
+    (cl-letf (((symbol-function 'evil-repeat-start)
+               (lambda ()
+                 (setq start-count (1+ start-count))
+                 (funcall orig-start)))
+              ((symbol-function 'evil-repeat-stop)
+               (lambda ()
+                 (setq stop-count (1+ stop-count))
+                 (funcall orig-stop))))
+      (evil-test-buffer
+        "[T]his is a test buffer"
+        ("w")
+        "This [i]s a test buffer")
+       (should (= start-count 0))
+       (should (= stop-count 0)))))
+
+(ert-deftest evil-test-repeat-type-caches-command-property-lookups ()
+  "`evil--repeat-type' caches the resolved repeat handler for commands."
+  :tags '(evil repeat)
+  (let* ((command (lambda () (interactive)))
+         (lookup-count 0)
+         (orig-get-command-property (symbol-function 'evil-get-command-property)))
+    (evil-set-command-properties command :repeat 'motion)
+    (cl-letf (((symbol-function 'evil-get-command-property)
+               (lambda (&rest args)
+                 (setq lookup-count (1+ lookup-count))
+                 (apply orig-get-command-property args))))
+      (should (eq (evil--repeat-type command) 'evil-repeat-motion))
+      (setq lookup-count 0)
+      (should (eq (evil--repeat-type command) 'evil-repeat-motion))
+      (should (= lookup-count 0)))))
+
+(ert-deftest evil-test-repeat-type-cache-invalidates-on-property-change ()
+  "Updating command properties invalidates the cached repeat handler."
+  :tags '(evil repeat)
+  (let ((command (lambda () (interactive))))
+    (evil-set-command-properties command :repeat 'motion)
+    (should (eq (evil--repeat-type command) 'evil-repeat-motion))
+    (evil-set-command-properties command :repeat 'change)
+    (should (eq (evil--repeat-type command) 'evil-repeat-changes))))
+
+(ert-deftest evil-test-repeat-keystrokes-post-reads-command-keys-once ()
+  "`evil-repeat-keystrokes' should read post-command keys once."
+  :tags '(evil repeat)
+  (let ((call-count 0)
+        recorded)
+    (cl-letf (((symbol-function 'evil-this-command-keys)
+               (lambda (&optional _post-cmd)
+                 (setq call-count (1+ call-count))
+                 [?a]))
+              ((symbol-function 'evil-repeat-record)
+               (lambda (info)
+                 (setq recorded info)))
+              ((symbol-function 'evil-clear-command-keys)
+               #'ignore))
+      (evil-repeat-keystrokes 'post)
+      (should (= call-count 1))
+      (should (equal recorded [?a])))))
 
 (ert-deftest evil-test-insert-repeat-info ()
   "Save key-sequence after Insert state"
