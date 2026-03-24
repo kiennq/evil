@@ -1089,6 +1089,20 @@ If nil, KEYS is used."
       (should (= call-count 1))
       (should (equal recorded [?a])))))
 
+(ert-deftest evil-test-repeat-force-abort-skips-mouse-key-fetch-for-recorded-commands ()
+  "`evil-repeat-force-abort-p' should not fetch keys for non-nil repeat types."
+  :tags '(evil repeat)
+  (let ((call-count 0)
+        (evil-repeat-buffer nil)
+        (evil-recording-repeat nil)
+        (evil-state 'normal))
+    (cl-letf (((symbol-function 'evil-mouse-events-p)
+               (lambda (&rest _)
+                 (setq call-count (1+ call-count))
+                 t)))
+      (should-not (evil-repeat-force-abort-p 'evil-repeat-keystrokes))
+      (should (= call-count 0)))))
+
 (ert-deftest evil-test-insert-repeat-info ()
   "Save key-sequence after Insert state"
   :tags '(evil repeat)
