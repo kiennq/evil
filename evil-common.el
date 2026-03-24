@@ -371,12 +371,17 @@ See also `evil-get-command-properties'."
   (let ((p (plist-member (evil-command-properties command) property)))
     (if p (cadr p) default)))
 
+(defun evil--clear-command-property-caches (properties)
+  "Remove derived cache entries from Evil command PROPERTIES."
+  (evil-plist-delete 'evil--repeat-type-cache properties))
+
 (defun evil-add-command-properties (command &rest properties)
   "Set each Evil command property KEY to its VAL for COMMAND.
 To replace existing properties, use `evil-set-command-properties'.
 
 \(fn COMMAND [KEY VAL]...)"
   (let ((props (evil-command-properties command)))
+    (setq props (evil--clear-command-property-caches props))
     (while properties
       (setq props (plist-put props (pop properties) (pop properties))))
     (setf (evil-command-properties command) props)))
@@ -394,7 +399,8 @@ To set multiple properties at once, see
 PROPERTIES should be a property list.
 This erases all previous properties; to only add properties,
 use `evil-set-command-property'."
-  (setf (evil-command-properties command) properties))
+  (setf (evil-command-properties command)
+        (evil--clear-command-property-caches properties)))
 
 (defun evil-remove-command-properties (command &rest properties)
   "Remove PROPERTIES from COMMAND.

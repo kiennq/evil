@@ -228,9 +228,17 @@ buffer is known and different from the current buffer."
 (defun evil--repeat-type (command)
   "Return the :repeat property of COMMAND."
   (when (functionp command) ; ignore keyboard macros
-    (let* ((type (evil-get-command-property command :repeat t))
-           (repeat-type (assq type evil-repeat-types)))
-      (if repeat-type (cdr repeat-type) type))))
+    (let* ((properties (evil-command-properties command))
+           (cache (plist-member properties 'evil--repeat-type-cache)))
+      (if cache
+          (cadr cache)
+        (let* ((repeat (plist-member properties :repeat))
+               (type (if repeat (cadr repeat) t))
+               (repeat-type (assq type evil-repeat-types))
+               (resolved (if repeat-type (cdr repeat-type) type)))
+          (evil-add-command-properties command
+                                       'evil--repeat-type-cache resolved)
+          resolved)))))
 
 (defun evil-repeat-type (command &optional default)
   "Return the :repeat property of COMMAND.
@@ -272,16 +280,18 @@ Return non-nil if so."
         (evil-repeat-abort))
        ;; ignore those commands completely
        ((or (null repeat-type)
-            (evil-mouse-events-p (this-command-keys-vector))))
-       ;; record command
-       (t
-        ;; In normal-state or visual state, each command is a single
-        ;; repeation, therefore start a new repeation.
-        (when (or (evil-normal-state-p)
-                  (evil-visual-state-p))
-          (evil-repeat-start))
-        (setq evil-recording-current-command t)
-        (funcall repeat-type 'pre))))))
+             (evil-mouse-events-p (this-command-keys-vector))))
+        ;; record command
+        (t
+         (unless (and (eq repeat-type 'evil-repeat-motion)
+                      (not (memq evil-state '(insert replace))))
+           ;; In normal-state or visual state, each command is a single
+           ;; repeation, therefore start a new repeation.
+           (when (or (evil-normal-state-p)
+                     (evil-visual-state-p))
+             (evil-repeat-start))
+           (setq evil-recording-current-command t)
+           (funcall repeat-type 'pre)))))))
 (put 'evil-repeat-pre-hook 'permanent-local-hook t)
 
 ;; called from `post-command-hook'
@@ -335,11 +345,12 @@ invoked the current command"
        `(set evil-this-register ,evil-this-register)))
     (setq evil-repeat-keys (evil-this-command-keys)))
    ((memq flag '(post pre-read-key-sequence))
-    (evil-repeat-record (if (zerop (length (evil-this-command-keys t)))
-                            evil-repeat-keys
-                          (evil-this-command-keys t)))
-    ;; erase commands keys to prevent double recording
-    (evil-clear-command-keys))))
+    (let ((keys (evil-this-command-keys t)))
+      (evil-repeat-record (if (zerop (length keys))
+                              evil-repeat-keys
+                            keys))
+      ;; erase commands keys to prevent double recording
+      (evil-clear-command-keys)))))
 
 (defun evil-repeat-motion (flag)
   "Repetition for motions.
