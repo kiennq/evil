@@ -256,9 +256,9 @@ Return non-nil if so."
       (eq repeat-type 'abort)           ; ... explicitly forced
       (eq evil-recording-repeat 'abort) ; ... already aborted
       (evil-emacs-state-p)              ; ... in Emacs state
-      (and (evil-mouse-events-p         ; ... mouse events
-            (this-command-keys-vector))
-           (null repeat-type))
+      (and (null repeat-type)           ; ... ignored mouse events
+           (evil-mouse-events-p
+            (this-command-keys-vector)))
       (minibufferp)))                   ; ... minibuffer activated
 
 (defun evil-repeat-record (info)
@@ -274,10 +274,10 @@ Return non-nil if so."
       (cond
        ;; abort the repeat
        ((evil-repeat-force-abort-p repeat-type)
-        ;; We mark the current record as being aborted, because there
-        ;; may be further pre-hooks following before the post-hook is
-        ;; called.
-        (evil-repeat-abort))
+         ;; We mark the current record as being aborted, because there
+         ;; may be further pre-hooks following before the post-hook is
+         ;; called.
+         (evil-repeat-abort))
        ;; ignore those commands completely
        ((or (null repeat-type)
              (evil-mouse-events-p (this-command-keys-vector))))
