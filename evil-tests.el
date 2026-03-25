@@ -10166,6 +10166,104 @@ when an error stops the execution of the macro"
         ("``")
         "alpha bravo charlie [d]elta"))))
 
+(ert-deftest evil-test-show-jumps-includes-scratch-buffer-jumps ()
+  "`evil-show-jumps' should display live jumps for `*scratch*'."
+  :tags '(evil jumps)
+  (let ((evil--jumps-buffer-targets "\\*\\(new\\|scratch\\|test\\)\\*")
+        (evil--jumps-window-jumps (make-hash-table :test 'eq)))
+    (evil-test-buffer
+      :buffer "*scratch*"
+      "alpha
+[b]ravo
+charlie
+delta"
+      ("G")
+      "alpha
+bravo
+charlie
+[d]elta"
+      (let ((jumps (evil--jumps-display-entries)))
+        (should jumps)
+        (should (string-match-p evil--jumps-buffer-targets (cadar jumps)))))))
+
+(ert-deftest evil-test-show-jumps-select-action-switches-to-scratch-buffer ()
+  "`evil--show-jumps-select-action' should handle scratch-buffer entries."
+  :tags '(evil jumps)
+  (let ((switched-buffer nil)
+        (killed-buffer nil)
+        (target-buffer (get-buffer-create "*scratch*"))
+        (jump-list-buffer (generate-new-buffer " *evil-jumps-list*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer target-buffer
+            (erase-buffer)
+            (insert "alpha\nbravo\ncharlie\ndelta\n")
+            (goto-char (point-min)))
+          (with-current-buffer jump-list-buffer
+            (cl-letf (((symbol-function 'kill-buffer)
+                       (lambda (&optional buffer-or-name)
+                         (setq killed-buffer (or buffer-or-name (current-buffer)))))
+                      ((symbol-function 'switch-to-buffer)
+                       (lambda (buffer-or-name &rest _)
+                         (setq switched-buffer buffer-or-name)
+                         (let ((buffer (if (bufferp buffer-or-name)
+                                           buffer-or-name
+                                         (get-buffer buffer-or-name))))
+                           (set-buffer buffer)
+                           buffer)))
+                      ((symbol-function 'find-file)
+                       (lambda (&rest _)
+                         (ert-fail "find-file should not be used for scratch jumps"))))
+              (evil--show-jumps-select-action ["1" "3" ("*scratch*")])))
+          (should (eq killed-buffer jump-list-buffer))
+          (should (equal switched-buffer "*scratch*"))
+          (with-current-buffer target-buffer
+            (should (= (point) 3))))
+      (when (buffer-live-p jump-list-buffer)
+        (kill-buffer jump-list-buffer))
+      (when (buffer-live-p target-buffer)
+        (kill-buffer target-buffer)))))
+
+(ert-deftest evil-test-jump-registration-for-goto-line-actions ()
+  "Commands with `:jump' should populate the jump list once per action."
+  :tags '(evil jumps)
+  (let ((evil--jumps-buffer-targets "\\*\\(new\\|scratch\\|test\\)\\*")
+        (evil--jumps-window-jumps (make-hash-table :test 'eq)))
+    (evil-test-buffer
+      :buffer "*scratch*"
+      "alpha
+[b]ravo
+charlie
+delta"
+      ("G")
+      "alpha
+bravo
+charlie
+[d]elta"
+      (should (= 1 (ring-length (evil--jumps-get-window-jump-list))))
+      ("gg")
+      "[a]lpha
+bravo
+charlie
+delta"
+      (should (= 2 (ring-length (evil--jumps-get-window-jump-list)))))))
+
+(ert-deftest evil-test-jumps-push-deduplicates-same-location ()
+  "`evil--jumps-push' should not duplicate the latest location." 
+  :tags '(evil jumps)
+  (with-temp-buffer
+    (let ((evil--jumps-buffer-targets "\\*\\(new\\|scratch\\|test\\)\\*")
+          (evil--jumps-window-jumps (make-hash-table :test 'eq))
+          (buffer-file-name nil))
+      (rename-buffer "*scratch*" t)
+      (evil-local-mode 1)
+      (evil-normal-state)
+      (insert "alpha\nbravo\n")
+      (goto-char (point-min))
+      (evil--jumps-push)
+      (evil--jumps-push)
+      (should (= 1 (ring-length (evil--jumps-get-window-jump-list)))))))
+
 (ert-deftest evil-test-insert-state-undo ()
   "Test that undo isn't lost when done from insert state."
   :tags '(evil)
