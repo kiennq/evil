@@ -89,6 +89,8 @@
                   "scripts/evil-benchmark-runtime")
 (declare-function evil-bench-startup-local-enable
                   "scripts/evil-benchmark-runtime")
+(declare-function evil-bench-window-configuration-churn
+                  "scripts/evil-benchmark-runtime")
 
 ;;; Code:
 
@@ -429,8 +431,17 @@
   (let ((evil-bench-run-on-load nil))
     (load (expand-file-name "scripts/evil-benchmark-runtime"
                             evil-test--root-directory)
-          nil t)
+           nil t)
     (should-not (null (evil-bench-motion-with-state-changes 1)))))
+
+(ert-deftest evil-test-runtime-benchmark-window-configuration-churn-runs ()
+  "The window-configuration churn workload runs in batch mode."
+  :tags '(evil)
+  (let ((evil-bench-run-on-load nil))
+    (load (expand-file-name "scripts/evil-benchmark-runtime"
+                            evil-test--root-directory)
+          nil t)
+    (should-not (null (evil-bench-window-configuration-churn 1)))))
 
 (ert-deftest evil-test-runtime-benchmark-large-file-cursor-motion-profile-runs ()
   "The large-file motion profile path runs without ELP setup errors."
@@ -10169,14 +10180,14 @@ when an error stops the execution of the macro"
 (ert-deftest evil-test-show-jumps-includes-scratch-buffer-jumps ()
   "`evil-show-jumps' should display live jumps for `*scratch*'."
   :tags '(evil jumps)
-  (let ((evil--jumps-buffer-targets "\\*\\(new\\|scratch\\|test\\)\\*")
-        (evil--jumps-window-jumps (make-hash-table :test 'eq)))
+  (let ((evil--jumps-buffer-targets "\\*\\(new\\|scratch\\|test\\)\\*"))
     (evil-test-buffer
       :buffer "*scratch*"
       "alpha
 [b]ravo
 charlie
 delta"
+      (set-window-parameter (selected-window) 'evil-jumps nil)
       ("G")
       "alpha
 bravo
@@ -10227,14 +10238,14 @@ charlie
 (ert-deftest evil-test-jump-registration-for-goto-line-actions ()
   "Commands with `:jump' should populate the jump list once per action."
   :tags '(evil jumps)
-  (let ((evil--jumps-buffer-targets "\\*\\(new\\|scratch\\|test\\)\\*")
-        (evil--jumps-window-jumps (make-hash-table :test 'eq)))
+  (let ((evil--jumps-buffer-targets "\\*\\(new\\|scratch\\|test\\)\\*"))
     (evil-test-buffer
       :buffer "*scratch*"
       "alpha
 [b]ravo
 charlie
 delta"
+      (set-window-parameter (selected-window) 'evil-jumps nil)
       ("G")
       "alpha
 bravo
@@ -10249,13 +10260,13 @@ delta"
       (should (= 2 (ring-length (evil--jumps-get-window-jump-list)))))))
 
 (ert-deftest evil-test-jumps-push-deduplicates-same-location ()
-  "`evil--jumps-push' should not duplicate the latest location." 
+  "`evil--jumps-push' should not duplicate the latest location."
   :tags '(evil jumps)
   (with-temp-buffer
     (let ((evil--jumps-buffer-targets "\\*\\(new\\|scratch\\|test\\)\\*")
-          (evil--jumps-window-jumps (make-hash-table :test 'eq))
           (buffer-file-name nil))
       (rename-buffer "*scratch*" t)
+      (set-window-parameter (selected-window) 'evil-jumps nil)
       (evil-local-mode 1)
       (evil-normal-state)
       (insert "alpha\nbravo\n")
@@ -10263,6 +10274,47 @@ delta"
       (evil--jumps-push)
       (evil--jumps-push)
       (should (= 1 (ring-length (evil--jumps-get-window-jump-list)))))))
+
+(ert-deftest evil-test-jumps-store-state-in-window-parameter ()
+  "`evil--jumps-get-current' should store state on the window itself."
+  :tags '(evil jumps)
+  (save-window-excursion
+    (let ((window (selected-window)))
+      (set-window-parameter window 'evil-jumps nil)
+      (should (evil-jumps-struct-p
+               (evil--jumps-get-current window)))
+      (should (evil-jumps-struct-p
+               (window-parameter window 'evil-jumps))))))
+
+(ert-deftest evil-test-jumps-split-window-does-not-share-state ()
+  "Split windows should not share the same jump ring object."
+  :tags '(evil jumps)
+  (save-window-excursion
+    (let ((evil--jumps-buffer-targets "\\*\\(new\\|scratch\\|test\\)\\*")
+          (source-buffer (get-buffer-create "*scratch*")))
+      (unwind-protect
+          (progn
+            (delete-other-windows)
+            (set-window-parameter (selected-window) 'evil-jumps nil)
+            (with-current-buffer source-buffer
+              (erase-buffer)
+              (evil-local-mode 1)
+              (evil-normal-state)
+              (insert "alpha\nbravo\n")
+              (goto-char (point-min)))
+            (switch-to-buffer source-buffer)
+            (evil--jumps-push)
+            (let* ((source (selected-window))
+                   (source-struct (evil--jumps-get-current source))
+                   (target (split-window-right)))
+              (evil--jumps-window-configuration-hook)
+              (let ((target-struct (evil--jumps-get-current target)))
+                (should (evil-jumps-struct-p target-struct))
+                (should-not (eq source-struct target-struct))
+                (should-not (eq (evil-jumps-struct-ring source-struct)
+                                (evil-jumps-struct-ring target-struct))))))
+        (when (buffer-live-p source-buffer)
+          (kill-buffer source-buffer))))))
 
 (ert-deftest evil-test-insert-state-undo ()
   "Test that undo isn't lost when done from insert state."

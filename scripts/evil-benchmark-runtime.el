@@ -205,6 +205,19 @@
         (when (> (line-number-at-pos) 20000)
           (goto-char (point-min)))))))
 
+(defun evil-bench-window-configuration-churn (repeats)
+  (evil-bench--with-buffer (buffer)
+    (evil-bench--measure "window-configuration-churn" repeats
+      (with-current-buffer buffer
+        (delete-other-windows)
+        (goto-char (point-min))
+        (evil-normal-state)
+        (evil-set-jump)
+        (let ((new-window (split-window-right)))
+          (other-window 1)
+          (other-window -1)
+          (delete-window new-window))))))
+
 
 (defun evil-bench--run-elp-profile (name thunk)
   (dolist (fn evil-bench--elp-functions)
@@ -281,6 +294,7 @@
   (evil-bench-local-mode-toggle 1200)
   (evil-bench-large-file-cursor-motion 1500)
   (evil-bench-motion-with-state-changes 1200)
+  (evil-bench-window-configuration-churn 2000)
   (evil-bench-profile-startup-local-enable)
   (evil-bench-profile-state-transitions)
   (evil-bench-profile-insert-edit-loop)

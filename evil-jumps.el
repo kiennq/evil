@@ -71,9 +71,6 @@ Otherwise the jump commands act only within the current buffer."
 (defvar evil--jumps-buffer-targets "\\*\\(new\\|scratch\\)\\*"
   "Regexp to determine if buffer with `buffer-name' is a valid jump target.")
 
-(defvar evil--jumps-window-jumps (make-hash-table)
-  "Hashtable which stores all jumps on a per window basis.")
-
 (defvar evil-jumps-history nil
   "History of `evil-mode' jumps that are persisted with `savehist'.")
 
@@ -89,13 +86,25 @@ Otherwise the jump commands act only within the current buffer."
        (goto-char (point-max))
        (insert (apply #'format format args) "\n"))))
 
+(defun evil--jumps-copy-struct (struct)
+  "Return a copy of jump STRUCT with independent mutable state."
+  (make-evil-jumps-struct
+   :ring (let ((ring (evil-jumps-struct-ring struct)))
+           (when ring
+             (ring-copy ring)))
+   :idx (evil-jumps-struct-idx struct)
+   :previous-pos (let ((pos (evil-jumps-struct-previous-pos struct)))
+                   (when pos
+                     (if (markerp pos)
+                         (copy-marker pos)
+                       pos)))))
+
 (defun evil--jumps-get-current (&optional window)
   (unless window (setq window (selected-window)))
-  (let ((jump-struct (gethash window evil--jumps-window-jumps)))
-    (unless jump-struct
-      (setq jump-struct (make-evil-jumps-struct))
-      (puthash window jump-struct evil--jumps-window-jumps))
-    jump-struct))
+  (or (window-parameter window 'evil-jumps)
+      (let ((jump-struct (make-evil-jumps-struct)))
+        (set-window-parameter window 'evil-jumps jump-struct)
+        jump-struct)))
 
 (defun evil--jumps-get-jumps (struct)
   (let ((ring (evil-jumps-struct-ring struct)))
@@ -289,23 +298,27 @@ POS defaults to point."
          (new-window (previous-window)))
     (when (and (not (eq existing-window new-window))
                (> (length window-list) 1))
-      (let* ((target-jump-struct (evil--jumps-get-current new-window)))
-        (if (not (ring-empty-p (evil--jumps-get-jumps target-jump-struct)))
-            (evil--jumps-message "target window %s already has %s jumps" new-window
-                                 (ring-length (evil--jumps-get-jumps target-jump-struct)))
+      (let* ((source-jump-struct (evil--jumps-get-current existing-window))
+             (target-jump-struct (window-parameter new-window 'evil-jumps))
+             (source-ring (evil-jumps-struct-ring source-jump-struct))
+             (target-ring (and target-jump-struct
+                                (evil-jumps-struct-ring target-jump-struct)))
+             ;; Emacs copies window parameters when splitting windows, so a
+             ;; freshly split window may transiently alias the source jump
+             ;; struct and ring until we replace it with an independent copy.
+             (shared-state (or (eq target-jump-struct source-jump-struct)
+                               (and source-ring target-ring
+                                    (eq source-ring target-ring)))))
+        (cond
+         ((or (null target-jump-struct)
+              shared-state
+              (ring-empty-p (evil--jumps-get-jumps target-jump-struct)))
           (evil--jumps-message "new target window detected; copying %s to %s" existing-window new-window)
-          (let* ((source-jump-struct (evil--jumps-get-current existing-window))
-                 (source-list (evil--jumps-get-jumps source-jump-struct)))
-            (when (= (ring-length (evil--jumps-get-jumps target-jump-struct)) 0)
-              (setf (evil-jumps-struct-previous-pos target-jump-struct) (evil-jumps-struct-previous-pos source-jump-struct))
-              (setf (evil-jumps-struct-idx target-jump-struct) (evil-jumps-struct-idx source-jump-struct))
-              (setf (evil-jumps-struct-ring target-jump-struct) (ring-copy source-list)))))))
-    ;; delete obsolete windows
-    (maphash (lambda (key _val)
-               (unless (member key window-list)
-                 (evil--jumps-message "removing %s" key)
-                 (remhash key evil--jumps-window-jumps)))
-             evil--jumps-window-jumps)))
+          (set-window-parameter new-window 'evil-jumps
+                                (evil--jumps-copy-struct source-jump-struct)))
+         (t
+          (evil--jumps-message "target window %s already has %s jumps" new-window
+                               (ring-length (evil--jumps-get-jumps target-jump-struct)))))))))
 (put 'evil--jumps-window-configuration-hook 'permanent-local-hook t)
 
 (defun evil--jump-hook (&optional command)
