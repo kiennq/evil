@@ -127,10 +127,25 @@ Otherwise the jump commands act only within the current buffer."
                                             mark))
                                      (file-name (cadr jump)))
                                 (when (and (not (file-remote-p file-name))
-                                           (file-exists-p file-name)
-                                           pos)
-                                  (list pos file-name))))
-                          (ring-elements (evil--jumps-get-window-jump-list))))))
+                                            (file-exists-p file-name)
+                                            pos)
+                                   (list pos file-name))))
+                           (ring-elements (evil--jumps-get-window-jump-list))))))
+
+(defun evil--jumps-display-entries ()
+  "Return printable entries for the current live jump list.
+Unlike `evil--jumps-savehist-sync', this preserves valid non-file targets
+such as `*scratch*'."
+  (delq nil
+        (mapcar (lambda (jump)
+                  (let* ((mark (car jump))
+                         (pos (if (markerp mark)
+                                  (marker-position mark)
+                                mark))
+                         (file-name (cadr jump)))
+                    (when (and pos file-name)
+                      (list pos file-name))))
+                (ring-elements (evil--jumps-get-window-jump-list)))))
 
 (defun evil--jumps-current-file-name ()
   "Get the current buffer file name for `evil--jumps-push'."
@@ -199,23 +214,25 @@ Otherwise the jump commands act only within the current buffer."
   :repeat nil
   (evil-with-view-list
     :name "evil-jumps"
-    :mode "Evil Jump List"
-    :format [("Jump" 5 nil)
-             ("Marker" 8 nil)
-             ("File/text" 1000 t)]
-    :entries (let* ((jumps (evil--jumps-savehist-sync))
-                    (count 0))
-               (cl-loop for jump in jumps
-                        collect `(nil [,(number-to-string (cl-incf count))
-                                       ,(number-to-string (car jump))
-                                       (,(cadr jump))])))
-    :select-action #'evil--show-jumps-select-action))
+     :mode "Evil Jump List"
+     :format [("Jump" 5 nil)
+              ("Marker" 8 nil)
+              ("File/text" 1000 t)]
+     :entries (let* ((jumps (evil--jumps-display-entries))
+                     (count 0))
+                (cl-loop for jump in jumps
+                         collect `(nil [,(number-to-string (cl-incf count))
+                                        ,(number-to-string (car jump))
+                                        (,(cadr jump))])))
+     :select-action #'evil--show-jumps-select-action))
 
 (defun evil--show-jumps-select-action (jump)
   (let ((position (string-to-number (elt jump 1)))
-        (file (car (elt jump 2))))
+         (file (car (elt jump 2))))
     (kill-buffer)
-    (switch-to-buffer (find-file file))
+    (if (string-match-p evil--jumps-buffer-targets file)
+        (switch-to-buffer file)
+      (switch-to-buffer (find-file file)))
     (goto-char position)))
 
 (defun evil-set-jump (&optional pos)
